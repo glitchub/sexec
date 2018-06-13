@@ -15,10 +15,11 @@
 
 #define die(...) fprintf(stderr, __VA_ARGS__), exit(125)
 
-char *usage=
-"Secure exec, start a program with various security measures in place. Usage:\n\
+char *usage="\
+Secure exec - start a program with various security measures in place.\n\
+Usage:\n\
 \n\
-    sexec [-r directory] [-c cap ...] [-e name=value ...] [-u username] -- /path/to/program [args ...]\n\
+    sexec [-r directory] [-c cap ...] [-e name=value ...] [-u username] [-s] -- /path/to/program [args ...]\n\
 \n\
 Where:\n\
 \n\
@@ -30,10 +31,13 @@ Where:\n\
                     listed in 'man capabilties', the leading 'CAP_'is optional\n\
                     and case is irrelevant. Can be used multiple times.\n\
 \n\
-    -e name=value   Add entry to program's environment. By default the\n\
-                    program's environment is empty. Can be used up to 63 times.\n\
+    -e name[=value] Add entry to program's environment, which by default is\n\
+                    empty. If the value is not provided then copy the value\n\
+                    from the parent environment. Can be used up to 63 times.\n\
 \n\
     -u username     Exec the program as specified user.\n\
+\n\
+    -s              Don't exec the program as session leader.\n\
 \n\
 In the event an error exit status is 125. Otherwise the exit status is that of\n\
 the exec'd program (which could also be 125).\n\
@@ -46,6 +50,7 @@ int main(int argc, char *argv[])
     cap_t caps;
     char *root=NULL, *env[NENV];
     int nenv=0, uid=-1, gid=-1;
+    int nolead=0;
 
     memset(env, 0, sizeof env);
 
@@ -53,7 +58,7 @@ int main(int argc, char *argv[])
     if (!(caps=cap_get_proc())) die("cap_get_proc failed: %s\n", strerror(errno));
     if (cap_clear_flag(caps, CAP_INHERITABLE)) die("cap_clear failed\n");
 
-    while(1) switch (getopt(argc, argv, ":r:c:e:u:"))
+    while(1) switch (getopt(argc, argv, ":r:c:e:u:s"))
     {
         case 'r':
         {
@@ -80,15 +85,26 @@ int main(int argc, char *argv[])
 
         case 'e':
         {
-            int n=0;
+            int n;
             if (nenv == NENV) die("Exceeded max %d env vars\n",NENV-1);
             // Must start with letter, then zero or more
-            // letter/number/underscores, then =, then arbitrary printable
-            // ascii
-            sscanf(optarg, "%*[A-Za-z]=%*[ -~]%n",&n);
-            if (!n) sscanf(optarg, "%*1[A-Za-z]%*[0-9A-Z0-9_]=%*[ -~]%n",&n);
-            if (!n) die("Invalid env var '%s'\n",optarg);
-            env[nenv++]=optarg;
+            // letter/number/underscores
+            n=0, sscanf(optarg, "%*[A-Za-z]%n",&n);
+            if (optarg[n]) n=0, sscanf(optarg, "%*1[A-Za-z]%*[0-9A-Z0-9_]%n",&n);
+            if (optarg[n]) 
+            {
+                // Possibly followed by '=' and arbitrary printable ascii
+                n=0, sscanf(optarg, "%*[A-Za-z]=%*[ -~]%n",&n);
+                if (optarg[n]) n=0, sscanf(optarg, "%*1[A-Za-z]%*[0-9A-Z0-9_]=%*[ -~]%n",&n);
+                if (optarg[n]) die("Invalid env var '%s'\n", optarg);
+                env[nenv++]=optarg;
+            } else
+            {
+                // fetch existing value for optarg
+                char *o=getenv(optarg);
+                if (!o) die("No such env var '%s'\n", optarg);
+                if (asprintf(&env[nenv++], "%s=%s", optarg, o) <= 0) die("asprintf failed!\n");
+            }
             break;
         }
 
@@ -98,6 +114,12 @@ int main(int argc, char *argv[])
             if (!p) die("Unable to lookup up user %s: %s\n", optarg, strerror(errno));
             uid=p->pw_uid;
             gid=p->pw_gid;
+            break;
+        }
+
+        case 's':
+        {
+            nolead=1;
             break;
         }
 
@@ -121,6 +143,9 @@ int main(int argc, char *argv[])
         if (!f && cap_drop_bound(v)) die("cap_drop bound %d failed: %s\n", v, strerror(errno));
     }
     cap_free(caps);
+
+    // maybe become session leader
+    if (!nolead) setsid(); // failure ok 
 
     // maybe chroot
     if (root && chroot(root)) die("chroot %s failed: %s\n", root, strerror(errno));
