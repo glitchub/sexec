@@ -28,7 +28,7 @@ Where:\n\
 \n\
     -c cap          Grant root capability to the exec'd program. By default the\n\
                     program will have no capabilties. Capability names are\n\
-                    listed in 'man capabilties', the leading 'CAP_'is optional\n\
+                    listed in 'man capabilties', the leading 'CAP_' is optional\n\
                     and case is irrelevant. Can be used multiple times.\n\
 \n\
     -e name[=value] Add entry to program's environment, which by default is\n\
@@ -148,7 +148,7 @@ int main(int argc, char *argv[])
     if (!nolead) setsid(); // failure ok 
 
     // maybe chroot
-    if (root && chroot(root)) die("chroot %s failed: %s\n", root, strerror(errno));
+    if (root && (chroot(root) || chdir("/"))) die("chroot %s failed: %s\n", root, strerror(errno));
 
     // maybe su, note the uid should be set last
     if (gid >= 0 && setgid(gid)) die("can't set gid %d: %s\n", gid, strerror(errno));
